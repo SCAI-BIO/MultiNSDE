@@ -78,8 +78,14 @@ target/
 # exclude data from source control by default
 /data/
 /models/
+/MultiNSDEs/Prognosis/models/Figs_Paper/*.pdf
+/MultiNSDEs/Prognosis/models/Figs_Paper/A4/
+/MultiNSDEs/Prognosis/models/Figs_Paper/PROACT_DeepSurv/
+/MultiNSDEs/Prognosis/models/Figs_Paper/A4_Extrapolation/
+/MultiNSDEs/Checks_CausalML/
 # Mac OS-specific storage files
 .DS_Store
+
 /SYNDAT/data/
 /SYNDAT/raw_output/
 # vim
