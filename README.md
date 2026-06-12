@@ -2,7 +2,7 @@
 
 ## Description
 
-This repository contains the official implementation of **MultiNSDEs**. Full details of the approach are on the [preprint](). 
+This repository contains the official implementation of **MultiNSDEs**. Full details of the approach are on the [preprint](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6909270). 
 
 --------
 
