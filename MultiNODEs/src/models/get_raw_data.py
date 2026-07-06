@@ -6,9 +6,33 @@ import pandas as pd
 from glob import glob
 from parser import base_parser
 import syndat
+import sys
+sys.path.append('../../')
 from val_utils import breslow_baseline_from_risk
 import warnings
 warnings.filterwarnings('ignore')
+
+
+def filter_extrapolation_endpoint_per_patient(df, patient_col='PTNO', time_col='TIME'):
+    """Keep one extrapolation endpoint row per patient based on observed masks. DATATOP only.
+
+    For each patient, we infer the endpoint as the latest time where at least one
+    longitudinal variable is observed (MASK_* == 1). If data curation is messed up this won't work.
+    """
+
+    mask_cols = [c for c in df.columns if c.startswith('MASK_')]
+
+    observed_any = df[mask_cols].fillna(0).gt(0).any(axis=1)
+    endpoint_by_patient = (
+        df.loc[observed_any, [patient_col, time_col]]
+        .groupby(patient_col, as_index=False)[time_col]
+        .max()
+        .rename(columns={time_col: '_ENDPOINT_TIME'})
+    )
+
+    df_endpoint = df.merge(endpoint_by_patient, on=patient_col, how='inner')
+    df_endpoint = df_endpoint[np.isclose(df_endpoint[time_col], df_endpoint['_ENDPOINT_TIME'])]
+    return df_endpoint.drop(columns=['_ENDPOINT_TIME'])
 
 def main(config):
 
@@ -123,8 +147,11 @@ def main(config):
     df_sims_long.to_csv(path, index=False)
 
     if config.extrapolation:
-        max_time = df_sims_long['TIME'].max()
-        df_sims_long = df_sims_long[df_sims_long['TIME'] == max_time]
+        if config.dataset == 'DATATOP':
+            df_sims_long = filter_extrapolation_endpoint_per_patient(df_sims_long)
+        else:
+            max_time = df_sims_long['TIME'].max()
+            df_sims_long = df_sims_long[df_sims_long['TIME'] == max_time]
 
     for col in df.columns:
         if col.startswith("MASK"):

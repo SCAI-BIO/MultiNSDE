@@ -9,6 +9,7 @@ import sys
 sys.path.append('../../')
 from Common_Functions.models.utils import print_current_losses
 from Common_Functions.models.utils_pbo import split_by_pbo
+from ATE_helpers import get_batch_rmst_or_components
 from solver import Solver
 from validation import *
 import warnings
@@ -44,7 +45,9 @@ class Train(Solver):
                          (epoch), 1e-3])
 
             epoch_time_init = time.time()
-            Time_TE = Event_TE = None # To avoid modifying the encoder
+            if not self.config.time_to_event:   
+                Time_TE = Event_TE = None # To avoid modifying the encoder
+            factor_OR_DO = 0 if self.config.Only_ObsEndpoints else 1
 
             # Training along dataset            
             for iter, data in progress_bar:
@@ -58,10 +61,18 @@ class Train(Solver):
                 if 'DRHS' in self.config.type_dynamics_lerner:
                     RHS_Data = data[4].to(self.device)
 
-                S_Data = data[5].to(self.device)
-                S_Mask = data[6].to(self.device)
-                Pi_Scores = data[7].to(self.device)
-                Obs_Scores = data[8].to(self.device)
+                if self.config.time_to_event:
+                    Time_TE = data[5].to(self.device)
+                    Event_TE = data[6].to(self.device)
+                    aux_idx = 2
+                else:
+                    Time_TE = Event_TE = None
+                    aux_idx = 0
+
+                S_Data = data[5 + aux_idx].to(self.device)
+                S_Mask = data[6 + aux_idx].to(self.device)
+                Pi_Scores = data[7 + aux_idx].to(self.device)
+                Obs_Scores = data[8 + aux_idx].to(self.device)
                 Placebo_Flag = data[-2].to(self.device)
 
                 z_init, KL_Long, RHS_Long, te_log_loss, log_prob_stat, KL_Sstatic, KL_Zstatic = self.Encoder(
@@ -82,14 +93,35 @@ class Train(Solver):
                     y_a = L_Data[0][:, -1, 0]
                     u_a = pred_x[:, -1, 0]
                     delta = L_Mask[0][:, -1, 0]
-                
+
+                elif self.config.dataset == 'DATATOP_Causal':
+                    if self.config.time_to_event:
+                        factual_risk = self.Encoder.get_risk(z_init, RHS_Data[:, 0])
+                        y_a, u_a, delta = get_batch_rmst_or_components(
+                            factual_risk,
+                            Time_TE,
+                            Event_TE,
+                            horizon=getattr(self.config, 'survival_target_time', None),
+                        )
+
                 if self.config.or_losses:
-                    r_i = delta / Obs_Scores * (y_a - u_a)
-                    loss_treatment = (r_i * (((1-Placebo_Flag)/Pi_Scores) - (Placebo_Flag/(1 - Pi_Scores)))).pow(2).mean()
-                    loss_treatment = self.config.lambda_OR_TRT * loss_treatment
-                    loss_dropout   = (r_i * (delta - Obs_Scores)).pow(2).mean()
-                    loss_dropout = self.config.lambda_OR_DO * loss_dropout
-                    loss = loss + loss_treatment + loss_dropout
+                    if self.config.dataset == 'A4_Causal':
+                        r_i = delta / Obs_Scores * (y_a - u_a)
+                        loss_treatment = (r_i * (((1-Placebo_Flag)/Pi_Scores) - (Placebo_Flag/(1 - Pi_Scores)))).pow(2).mean()
+                        loss_treatment = self.config.lambda_OR_TRT * loss_treatment
+                        loss_dropout   = (r_i * (delta - Obs_Scores)).pow(2).mean()
+                        loss_dropout = factor_OR_DO * self.config.lambda_OR_DO * loss_dropout
+                        loss = loss + loss_treatment + loss_dropout
+
+                    if self.config.dataset == 'DATATOP_Causal':
+                        r_i = delta / Obs_Scores * (y_a - u_a)  # DATATOP OR residual is theobserved RMST target minus predicted RMST, reweighted for observation.
+                        # Multi-arm setting: Pi_Scores already matches each patient's realized arm.
+                        treatment_term = r_i / Pi_Scores  # Reweight the DATATOP residual by the realized treatment propensity
+                        loss_treatment = treatment_term.pow(2).mean()
+                        loss_treatment = self.config.lambda_OR_TRT * loss_treatment
+                        loss_dropout   = (r_i * (delta - Obs_Scores)).pow(2).mean()
+                        loss_dropout = factor_OR_DO * self.config.lambda_OR_DO * loss_dropout
+                        loss = loss + loss_treatment + loss_dropout
 
                 if self.config.time_to_event:
                     # te_log_loss has a dimension per TE variable in case one would need it in the future

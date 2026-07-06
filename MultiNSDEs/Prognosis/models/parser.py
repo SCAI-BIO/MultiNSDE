@@ -41,7 +41,7 @@ def base_parser():
                         choices=['Sampling_PSD'])
     parser.add_argument('--Val_Scenario', type=int,
                         default=1,
-                        choices=[0, 1, 2, 3])
+                        choices=[0, 1, 2, 3, 4, 5])
     parser.add_argument('--extrapolation', type=int,
                         default=0,
                         choices=[0, 1])

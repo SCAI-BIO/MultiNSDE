@@ -79,10 +79,10 @@ class DeepSurvHead(nn.Module):
 
         # compute cumulative log-sum-exp of the risk (numerically stable)
         # but easier: compute cumulative sum of exp(log_risk) for risk sums
-        exp_lr = torch.exp(lr_sorted)
         # cumulative sum over sorted exp_lr gives denominator for each observed event
         # risk_set_sum_at_i = sum_{j <= i} exp_lr[j] because descending sort
-        risk_set_cumsum = torch.cumsum(exp_lr, dim=0)
+
+        log_risk_set = torch.logcumsumexp(lr_sorted, dim=0) # this function allows to compute directly in log-space to avoid overflow issues when exp(lr) becomes large.
 
         # for positions where event==1, partial log-likelihood term:
         # sum_i events_i * (lr_i - log(risk_set_sum_at_i))
@@ -93,9 +93,9 @@ class DeepSurvHead(nn.Module):
             return torch.tensor(0., device=log_risk.device, requires_grad=True)
 
         lr_obs = lr_sorted[observed_idx]
-        denom_obs = risk_set_cumsum[observed_idx]
+        denom_obs = log_risk_set[observed_idx]
 
-        pll = torch.sum(lr_obs - torch.log(denom_obs + 1e-12))
+        pll = torch.sum(lr_obs - denom_obs)
         return pll / (observed_idx.sum().float())
  
     def forward(self, x):

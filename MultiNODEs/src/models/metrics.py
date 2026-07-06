@@ -59,6 +59,30 @@ def compute_stats(df, group_cols, metrics, agg, label):
     
     return out.assign(Variable=label)
 
+def filter_extrapolation_endpoint_per_patient(df, patient_col='PDDOCID', time_col='TIME'):
+    """
+    Gets last obsevation per patient for patient-wise extrapolation scenarios.
+    """
+
+    mask_cols = [c for c in df.columns if c.startswith('MASK_')]
+    if not mask_cols:
+        return df[df[time_col] == df[time_col].max()]
+
+    observed_any = df[mask_cols].fillna(0).gt(0).any(axis=1)
+    endpoint_by_patient = (
+        df.loc[observed_any, [patient_col, time_col]]
+        .groupby(patient_col, as_index=False)[time_col]
+        .max()
+        .rename(columns={time_col: '_ENDPOINT_TIME'})
+    )
+
+    if endpoint_by_patient.empty:
+        return df[df[time_col] == df[time_col].max()]
+
+    df_endpoint = df.merge(endpoint_by_patient, on=patient_col, how='inner')
+    df_endpoint = df_endpoint[np.isclose(df_endpoint[time_col], df_endpoint['_ENDPOINT_TIME'])]
+    return df_endpoint.drop(columns=['_ENDPOINT_TIME'])
+
 def main(config, opcs):
 
     print('Getting %s Metrics'%(config.dataset))
@@ -84,6 +108,11 @@ def main(config, opcs):
         round_05 = []
         only_pos = True # There are NO variables with negative values
         max_time = 17
+    elif config.dataset == "DATATOP":
+        post_processing_cols=[]
+        round_05=[]
+        only_pos = True # There are NO variables with negative values
+        max_time = 10
     else:
         post_processing_cols=[]
         round_05=[]
@@ -98,13 +127,25 @@ def main(config, opcs):
     metrics_path = os.path.join(config.folder_path, 'Metrics')
     os.makedirs(metrics_path, exist_ok=True)
 
+    if config.dataset=="DATATOP":
+        long_info['Enc']=1
+
+    drug_labels = (
+        {0: "Placebo", 1: "Treatment_1", 2: "Treatment_2", 3: "Treatment_3"}
+        if config.dataset == "DATATOP"
+        else {0: "Placebo", 1: "Treated"}
+    )
+
     # Note that we can't map some of the variables from classes to their original values
     # to calculate the metrics otherwise scores like F1 won't work because of values like 0.5
     for idx, slong_name in enumerate(sims_long):
         ldt_Enc = pd.read_csv(slong_name, na_values='.')
         if config.extrapolation:
-            ldt_Enc = ldt_Enc[ldt_Enc.TIME == max_time]
-        ldt_Enc["DRUG"] = ldt_Enc["DRUG"].map({0: "Placebo", 1: "Treated"})
+            if config.dataset == "DATATOP":
+                ldt_Enc = filter_extrapolation_endpoint_per_patient(ldt_Enc)
+            else:
+                ldt_Enc = ldt_Enc[ldt_Enc.TIME == max_time]
+        ldt_Enc["DRUG"] = ldt_Enc["DRUG"].map(drug_labels)
         lt_Enc = long_info[long_info['Enc'] == idx + 1]
 
         for var in lt_Enc['Variable']:

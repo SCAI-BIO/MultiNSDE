@@ -59,6 +59,40 @@ def compute_stats(df, group_cols, metrics, agg, label):
     
     return out.assign(Variable=label)
 
+def filter_extrapolation_endpoint_per_patient(df, patient_col='PTNO', time_col='TIME'):
+    """
+    Gets last obsevation per patient for patient-wise extrapolation scenarios.
+    """
+
+    mask_cols = [c for c in df.columns if c.startswith('MASK_')]
+    if not mask_cols:
+        return df[df[time_col] == df[time_col].max()]
+
+    observed_any = df[mask_cols].fillna(0).gt(0).any(axis=1)
+    endpoint_by_patient = (
+        df.loc[observed_any, [patient_col, time_col]]
+        .groupby(patient_col, as_index=False)[time_col]
+        .max()
+        .rename(columns={time_col: '_ENDPOINT_TIME'})
+    )
+
+    if endpoint_by_patient.empty:
+        return df[df[time_col] == df[time_col].max()]
+
+    df_endpoint = df.merge(endpoint_by_patient, on=patient_col, how='inner')
+    df_endpoint = df_endpoint[np.isclose(df_endpoint[time_col], df_endpoint['_ENDPOINT_TIME'])]
+    return df_endpoint.drop(columns=['_ENDPOINT_TIME'])
+
+def filter_longitudinal_extrapolation(df, config):
+    """
+    Gets the correct extrapolation scenario depending on the dataset.
+    """
+
+    if config.dataset == 'DATATOP':
+        return filter_extrapolation_endpoint_per_patient(df)
+
+    return df[df['TIME'] == df['TIME'].max()]
+
 def main(config, opcs):
 
     print('Getting %s Metrics'%(config.dataset))
@@ -68,7 +102,6 @@ def main(config, opcs):
     long_info = load_long_info(config, read_csv_values)
     results_path_LEnc = os.path.join(config.folder_path, "Long_Encs", 'Scenario%d'%(config.Val_Scenario))
     os.makedirs(results_path_LEnc, exist_ok=True)
-    long_cols = ['PTNO', 'REPI', 'TIME', 'DRUG']
     cols_extend = ['REC_', 'OBS_', 'SIM_', 'MASK_']
     post_processing_prefix = ['REC_', 'OBS_', 'SIM_']
     if config.dataset == "A4":
@@ -76,16 +109,26 @@ def main(config, opcs):
         post_processing_cols = ['MCQT', 'DIGITTOTAL', 'FCTOTF', 'FCTOTC', 'FCTOTAL96']
         only_pos = False # There are some variables with negative values
         max_time = 240
+        patient_col = 'PTNO'
     elif config.dataset == "PROACT":
         post_processing_cols = ['VITALSIGNS@Pulse', 'VITALSIGNS@Blood_Pressure_Diastolic',
                             'VITALSIGNS@Blood_Pressure_Systolic']
         round_05 = []
         only_pos = True # There are NO variables with negative values
         max_time = 17
+        patient_col = 'PTNO'
+    elif config.dataset == "DATATOP":
+        post_processing_cols=[]
+        round_05=[]
+        only_pos = True # There are NO variables with negative values afaik
+        max_time = 10
+        patient_col = 'PTNO'
     else:
         post_processing_cols=[]
         round_05=[]
         only_pos = True # There are NO variables with negative values
+    
+    long_cols = [patient_col, 'REPI', 'TIME', 'DRUG']
 
     strat_vars=[]
     group_global = strat_vars + ["TIME"]
@@ -95,15 +138,32 @@ def main(config, opcs):
     metrics_overall_long_cat = []
     metrics_path = os.path.join(config.folder_path, 'Metrics')
     os.makedirs(metrics_path, exist_ok=True)
+    scenario_label = 'Train' if config.Val_Scenario == 0 else 'Val%d'%(config.Val_Scenario)
+
+    def metrics_output_path(stem):
+        return os.path.join(metrics_path, '%s_%s.csv'%(stem, scenario_label))
+
+    if config.dataset=="DATATOP": #Shitty patchuuu
+        long_info['Enc']=1
+
+    drug_labels = (
+        {0: "Placebo", 1: "Treatment_1", 2: "Treatment_2", 3: "Treatment_3"}
+        if config.dataset == "DATATOP"
+        else {0: "Placebo", 1: "Treated"}
+    )
 
     # Note that we can't map some of the variables from classes to their original values
     # to calculate the metrics otherwise scores like F1 won't work because of values like 0.5
     for idx, slong_name in enumerate(sims_long):
         ldt_Enc = pd.read_csv(slong_name, na_values='.')
         if config.extrapolation:
-            ldt_Enc = ldt_Enc[ldt_Enc.TIME == max_time]
-        ldt_Enc["DRUG"] = ldt_Enc["DRUG"].map({0: "Placebo", 1: "Treated"})
+            ldt_Enc = filter_longitudinal_extrapolation(ldt_Enc, config)
+        ldt_Enc["DRUG"] = ldt_Enc["DRUG"].map(drug_labels)
         lt_Enc = long_info[long_info['Enc'] == idx + 1]
+        if config.dataset == "DATATOP":
+            mask = lt_Enc['Type'] == 'bce'
+            lt_Enc.loc[mask, ['Type', 'Cats']] = ['cat', 2]
+            lt_Enc = lt_Enc[lt_Enc.Variable != 'death']
 
         for var in lt_Enc['Variable']:
             print('Long Enc %d - Variable %s'%(idx, var))
@@ -126,10 +186,10 @@ def main(config, opcs):
                 rp_Enc_oneVar = get_rp(ldt_Enc_oneVar, lt=lt_Enc_oneVar)
 
                 all_parts = []
-                unique_ids = ldt_Enc_oneVar['PTNO'].unique()
+                unique_ids = ldt_Enc_oneVar[patient_col].unique()
                 for i in range(0, len(unique_ids), 5):
                     ids_subset = unique_ids[i:i+5]
-                    ldt_subset = ldt_Enc_oneVar[ldt_Enc_oneVar["PTNO"].isin(ids_subset)]
+                    ldt_subset = ldt_Enc_oneVar[ldt_Enc_oneVar[patient_col].isin(ids_subset)]
                     part_df = convert_data_to_tidy(ldt_subset, 'long', only_pos=only_pos,
                                                 only_realtimes=(config.Val_Scenario in [0, 1]))
                     all_parts.append(part_df)
@@ -193,7 +253,7 @@ def main(config, opcs):
             compute_stats(metrics_full_long_cat, group_strat, ["F1", "Accuracy", "Precision", "Recall"], "std", "Std (Global)")],
             ignore_index=True)
         metrics_full_long_cat[["F1", "Accuracy", "Precision", "Recall"]] = metrics_full_long_cat[["F1", "Accuracy", "Precision", "Recall"]].round(2)
-        metrics_full_long_cat.to_csv(os.path.join(metrics_path, 'full_long_cat.csv'), index=False)
+        metrics_full_long_cat.to_csv(metrics_output_path('full_long_cat'), index=False)
 
         metrics_overall_long_cat = pd.concat(
             [metrics_overall_long_cat,
@@ -201,7 +261,7 @@ def main(config, opcs):
             compute_stats(metrics_full_long_cat, group_strat, ["F1", "Accuracy", "Precision", "Recall"], "std", "Std (Global)")],
             ignore_index=True)
         metrics_overall_long_cat[["F1", "Accuracy", "Precision", "Recall"]] = metrics_overall_long_cat[["F1", "Accuracy", "Precision", "Recall"]].round(2)
-        metrics_overall_long_cat.to_csv(os.path.join(metrics_path, 'overall_long_cat.csv'), index=False)
+        metrics_overall_long_cat.to_csv(metrics_output_path('overall_long_cat'), index=False)
     except:
         pass
 
@@ -214,7 +274,7 @@ def main(config, opcs):
         ignore_index=True)
 
     metrics_full_long_cont[["MAE", "RMSE", "MAPE"]] = metrics_full_long_cont[["MAE", "RMSE", "MAPE"]].round(2)
-    metrics_full_long_cont.to_csv(os.path.join(metrics_path, 'full_long_cont.csv'), index=False)
+    metrics_full_long_cont.to_csv(metrics_output_path('full_long_cont'), index=False)
 
     metrics_overall_long_cont = pd.concat(
         [metrics_overall_long_cont,
@@ -222,82 +282,81 @@ def main(config, opcs):
         compute_stats(metrics_overall_long_cont, group_strat, ["MAE", "RMSE", "MAPE"], "std", "Std (Global)")],
         ignore_index=True)
     metrics_overall_long_cont[["MAE", "RMSE", "MAPE"]] = metrics_overall_long_cont[["MAE", "RMSE", "MAPE"]].round(2)
-    metrics_overall_long_cont.to_csv(os.path.join(metrics_path, 'overall_long_cont.csv'), index=False)
+    metrics_overall_long_cont.to_csv(metrics_output_path('overall_long_cont'), index=False)
 
-    if config.static_data:
-        sims_stat = [p for p in sims_files if 'Stat' in Path(p).stem]
-        static_info = read_csv_values(os.path.join(
-            config.train_dir, config.statictypes_fname),
-            header=0)
-        results_path_SEnc = os.path.join(config.folder_path , "Stat_Encs", 'Scenario%d'%(config.Val_Scenario))
-        os.makedirs(results_path_SEnc, exist_ok=True)
-        static_cols = ['PTNO', 'REPI', 'DRUG']
+    sims_stat = [p for p in sims_files if 'Stat' in Path(p).stem]
+    static_info = read_csv_values(os.path.join(
+        config.train_dir, config.statictypes_fname),
+        header=0)
+    results_path_SEnc = os.path.join(config.folder_path , "Stat_Encs", 'Scenario%d'%(config.Val_Scenario))
+    os.makedirs(results_path_SEnc, exist_ok=True)
+    static_cols = [patient_col, 'REPI', 'DRUG']
 
-        metrics_full_stat_cont = []
-        metrics_full_stat_cat = []
+    metrics_full_stat_cont = []
+    metrics_full_stat_cat = []
 
-        for idx, stat_name in enumerate(sims_stat):
-            sdt_Enc = pd.read_csv(stat_name, na_values='.')
-            st_Enc = static_info
-            drug_info = ldt_Enc.loc[ldt_Enc["TIME"] == 0, ["PTNO", "REPI", "DRUG"]]
-            sdt_Enc = sdt_Enc.merge(drug_info, on=["PTNO", "REPI"], how="left")
+    for idx, stat_name in enumerate(sims_stat):
+        sdt_Enc = pd.read_csv(stat_name, na_values='.')
+        st_Enc = static_info
+        drug_info = ldt_Enc.loc[ldt_Enc["TIME"] == 0, [patient_col, "REPI", "DRUG"]]
+        sdt_Enc = sdt_Enc.merge(drug_info, on=[patient_col, "REPI"], how="left")
 
-            for var in st_Enc['Variable']:
-                print('Static Enc %d - Variable %s'%(idx, var))
-                if var in post_processing_cols:
-                    for prefix in post_processing_prefix:
-                        col = f"{prefix}{var}"
-                        if col in ldt_Enc.columns:
-                            ldt_Enc[col] = ldt_Enc[col].round().astype(int)
-                if var in round_05:
-                    for prefix in post_processing_prefix:
-                        col = f"{prefix}{var}"
-                        if col in ldt_Enc.columns:
-                            ldt_Enc[col] = ldt_Enc[col].apply(round_to_half)
+        for var in st_Enc['Variable']:
+            print('Static Enc %d - Variable %s'%(idx, var))
+            if var in post_processing_cols:
+                for prefix in post_processing_prefix:
+                    col = f"{prefix}{var}"
+                    if col in ldt_Enc.columns:
+                        ldt_Enc[col] = ldt_Enc[col].round().astype(int)
+            if var in round_05:
+                for prefix in post_processing_prefix:
+                    col = f"{prefix}{var}"
+                    if col in ldt_Enc.columns:
+                        ldt_Enc[col] = ldt_Enc[col].apply(round_to_half)
 
-                static_cols_oneVar = static_cols + [s + var for s in cols_extend]
+            static_cols_oneVar = static_cols + [s + var for s in cols_extend]
 
-                sdt_Enc_oneVar = sdt_Enc[static_cols_oneVar]
-                st_Enc_oneVar = st_Enc[st_Enc['Variable'] == var]
-                rp_Enc_oneVar = get_rp(st=st_Enc_oneVar)
+            sdt_Enc_oneVar = sdt_Enc[static_cols_oneVar]
+            st_Enc_oneVar = st_Enc[st_Enc['Variable'] == var]
+            rp_Enc_oneVar = get_rp(st=st_Enc_oneVar)
 
-                all_parts = []
-                unique_ids = sdt_Enc_oneVar['PTNO'].unique()
-                for i in range(0, len(unique_ids), 5):
-                    ids_subset = unique_ids[i:i+5]
-                    sdt_subset = sdt_Enc_oneVar[sdt_Enc_oneVar["PTNO"].isin(ids_subset)]
-                    part_df = convert_data_to_tidy(sdt_subset, 'static', only_pos=True,
-                                                   only_realtimes=True)
-                    all_parts.append(part_df)  
-                sdt_Enc_oneVar = pd.concat(all_parts, axis=0, ignore_index=True)
+            all_parts = []
+            unique_ids = sdt_Enc_oneVar[patient_col].unique()
+            for i in range(0, len(unique_ids), 5):
+                ids_subset = unique_ids[i:i+5]
+                sdt_subset = sdt_Enc_oneVar[sdt_Enc_oneVar[patient_col].isin(ids_subset)]
+                part_df = convert_data_to_tidy(sdt_subset, 'static', only_pos=True,
+                                                only_realtimes=True)
+                all_parts.append(part_df)  
+            sdt_Enc_oneVar = pd.concat(all_parts, axis=0, ignore_index=True)
 
-                if st_Enc_oneVar['Cats'].iloc[0] == 1:
-                    sdt_Enc_oneVar["DV"] = (
-                        sdt_Enc_oneVar
-                        .groupby(["SUBJID", "TYPE"])["DV"]
-                        .transform("median"))
-                else:
-                    sdt_Enc_oneVar["DV"] = (
-                        sdt_Enc_oneVar
-                        .groupby(["SUBJID", "TYPE"])["DV"]
-                        .transform(lambda x: x.mode().iloc[0] if not x.mode().empty else pd.NA))
-                sdt_Enc_oneVar = sdt_Enc_oneVar[sdt_Enc_oneVar.REPI == 1]
+            if st_Enc_oneVar['Cats'].iloc[0] == 1:
+                sdt_Enc_oneVar["DV"] = (
+                    sdt_Enc_oneVar
+                    .groupby(["SUBJID", "TYPE"])["DV"]
+                    .transform("median"))
+            else:
+                sdt_Enc_oneVar["DV"] = (
+                    sdt_Enc_oneVar
+                    .groupby(["SUBJID", "TYPE"])["DV"]
+                    .transform(lambda x: x.mode().iloc[0] if not x.mode().empty else pd.NA))
+            sdt_Enc_oneVar = sdt_Enc_oneVar[sdt_Enc_oneVar.REPI == 1]
 
-                # Given that we are doing it by variable  and that it is static
-                # full and overall are the same
-                if st_Enc_oneVar['Type'].item() == 'cat':
-                    metrics = compute_categorical_error_metrics(
-                        rp_Enc_oneVar,sdt_Enc_oneVar,
-                        mode="Simulations",
-                        strat_vars=strat_vars,
-                        average="weighted", static=True)
-                    metrics_full_stat_cat.append(metrics['full'])
-                else:
-                    metrics = compute_continuous_error_metrics(
-                        rp_Enc_oneVar,sdt_Enc_oneVar,
-                        mode="Simulations",
-                        strat_vars=strat_vars, static=True)
-                    metrics_full_stat_cont.append(metrics['full'])
+            # Given that we are doing it by variable  and that it is static
+            # full and overall are the same
+            if st_Enc_oneVar['Type'].item() == 'cat':
+                metrics = compute_categorical_error_metrics(
+                    rp_Enc_oneVar,sdt_Enc_oneVar,
+                    mode="Simulations",
+                    strat_vars=strat_vars,
+                    average="weighted", static=True)
+                metrics_full_stat_cat.append(metrics['full'])
+            else:
+                metrics = compute_continuous_error_metrics(
+                    rp_Enc_oneVar,sdt_Enc_oneVar,
+                    mode="Simulations",
+                    strat_vars=strat_vars, static=True)
+                metrics_full_stat_cont.append(metrics['full'])
 
         metrics_full_stat_cat = pd.concat(metrics_full_stat_cat, ignore_index=True)
         metrics_full_stat_cont = pd.concat(metrics_full_stat_cont, ignore_index=True)
@@ -308,7 +367,7 @@ def main(config, opcs):
             compute_stats(metrics_full_stat_cat, group_strat, ["F1", "Accuracy", "Precision", "Recall"], "std", "Std")],
             ignore_index=True)
         metrics_full_stat_cat[["F1", "Accuracy", "Precision", "Recall"]] = metrics_full_stat_cat[["F1", "Accuracy", "Precision", "Recall"]].round(2)
-        metrics_full_stat_cat.to_csv(os.path.join(metrics_path, 'full_stat_cat.csv'), index=False)
+        metrics_full_stat_cat.to_csv(metrics_output_path('full_stat_cat'), index=False)
 
         metrics_full_stat_cont = pd.concat(
             [metrics_full_stat_cont,
@@ -316,7 +375,7 @@ def main(config, opcs):
             compute_stats(metrics_full_stat_cont, group_strat, ["MAE", "RMSE", "MAPE"], "std", "Std")],
             ignore_index=True)
         metrics_full_stat_cont[["MAE", "RMSE", "MAPE"]] = metrics_full_stat_cont[["MAE", "RMSE", "MAPE"]].round(2)
-        metrics_full_stat_cont.to_csv(os.path.join(metrics_path, 'full_stat_cont.csv'), index=False)
+        metrics_full_stat_cont.to_csv(metrics_output_path('full_stat_cont'), index=False)
 
 if __name__ == '__main__':
 
@@ -342,8 +401,9 @@ if __name__ == '__main__':
         ep_numbers = []
         for path in opcs:
             stem = Path(path).stem 
-            if "EP" in stem:
-                ep_numbers.append(int(stem.split("EP")[-1])) 
+            match = re.search(r'EP(\d+)', stem)
+            if match:
+                ep_numbers.append(int(match.group(1)))
         max_ep = max(ep_numbers)
 
     main(config, opcs)

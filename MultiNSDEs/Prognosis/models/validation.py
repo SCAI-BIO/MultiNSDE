@@ -11,6 +11,7 @@ from Common_Functions.models.val_utils import (
     unscale, transform_back)
 from Prognosis.data.load_A4 import load_only_A4_types
 from Prognosis.data.load_PROACT import load_only_PROACT_types
+from Prognosis.data.load_DATATOP import load_only_DATATOP_types
 warnings.filterwarnings('ignore')
 
 
@@ -265,10 +266,9 @@ class Validation(Solver):
                 'PPD_Sampling_%sEp%d.pth'%(best, self.config.epoch_init))
 
             if os.path.isfile(self.IC_data_path):
-                ppd_data = torch.load(self.IC_data_path)
+                ppd_data = torch.load(self.IC_data_path, weights_only=False)
                 self.z0_long = ppd_data['Z0_Long']
-                if self.config.static_data:
-                    self.z0_stat = ppd_data['Z0_Stat']
+                self.z0_stat = ppd_data['Z0_Stat']
                 if self.config.type_hivae == 'IC_BL_HIVAE':
                     self.rhs_long = ppd_data['RHS_Long']
             else:
@@ -288,23 +288,23 @@ class Validation(Solver):
                     means, stds = rhs_long.mean(0), rhs_long.std(0)
                     self.RHS_Long_Dists = dist.normal.Normal(means, stds)
                 
-                if self.config.static_data:
-                    z0_stat = params_data['Z0_Stat']
-                    s_samples_static = params_data['GMM_Component']
-                    K = s_samples_static.shape[1] 
-                    self.Stat_Dists = [None] * K
 
-                    s_idx = s_samples_static.argmax(dim=-1) # B
-                    z_by_component = [[] for _ in range(K)]
+                z0_stat = params_data['Z0_Stat']
+                s_samples_static = params_data['GMM_Component']
+                K = s_samples_static.shape[1] 
+                self.Stat_Dists = [None] * K
 
-                    for comp in range(K):
-                        mask = (s_idx == comp) # B x 1
-                        z_by_component[comp] = z0_stat[mask] # b x Features
+                s_idx = s_samples_static.argmax(dim=-1) # B
+                z_by_component = [[] for _ in range(K)]
 
-                    for i in range(K):
-                        z_flat = z_by_component[i].view(-1, z_by_component[i].size(-1)) # (B x REPI) x Features
-                        means, stds = z_flat.mean(0), z_flat.std(0)
-                        self.Stat_Dists[i] = (dist.normal.Normal(means, stds))
+                for comp in range(K):
+                    mask = (s_idx == comp) # B x 1
+                    z_by_component[comp] = z0_stat[mask] # b x Features
+
+                for i in range(K):
+                    z_flat = z_by_component[i].view(-1, z_by_component[i].size(-1)) # (B x REPI) x Features
+                    means, stds = z_flat.mean(0), z_flat.std(0)
+                    self.Stat_Dists[i] = (dist.normal.Normal(means, stds))
 
         for iter, data in progress_bar_val:
 
@@ -371,6 +371,10 @@ class Validation(Solver):
                 DATA['Real_VarTypes_Stat'] = real_static_types
             elif self.config.dataset == 'PROACT':
                 real_long_types, real_static_types = load_only_PROACT_types(self.config)
+                DATA['Real_VarTypes_Long'] = real_long_types
+                DATA['Real_VarTypes_Stat'] = real_static_types
+            elif self.config.dataset == 'DATATOP':
+                real_long_types, real_static_types = load_only_DATATOP_types(self.config)
                 DATA['Real_VarTypes_Long'] = real_long_types
                 DATA['Real_VarTypes_Stat'] = real_static_types
 

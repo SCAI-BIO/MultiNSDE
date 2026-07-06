@@ -9,7 +9,7 @@ def base_parser():
                         choices=['train', 'val'])
     parser.add_argument('--dataset', type=str,
                         default='A4',
-                        choices=['A4','PROACT'])
+                        choices=['A4','PROACT','DATATOP'])
     parser.add_argument('--GPU', type=str, default='-1',
                         help='Set -1 for CPU running')
     parser.add_argument('--seed', type=int,

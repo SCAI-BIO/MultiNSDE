@@ -12,6 +12,57 @@ from Common_Functions.models.val_utils import breslow_baseline_from_risk
 import warnings
 warnings.filterwarnings('ignore')
 
+
+def round_ordinal_columns(df, var_names, var_types, prefixes=('OBS_', 'SIM_', 'REC_')):
+    """Round columns tied to ordinal variables while preserving NaNs."""
+    var_types = np.asarray(var_types)
+    if var_types.ndim == 1:
+        return df
+
+    ord_vars = [
+        name for name, (type_, _) in zip(var_names, var_types[:, :2])
+        if str(type_).lower() == 'ord'
+    ]
+    if not ord_vars:
+        return df
+
+    for var in ord_vars:
+        for prefix in prefixes:
+            col = f'{prefix}{var}'
+            if col in df.columns:
+                df[col] = np.rint(df[col])
+    return df
+
+
+def filter_extrapolation_endpoint_per_patient(df, patient_col='PTNO', time_col='TIME'):
+    """Keep one extrapolation endpoint row per patient based on observed masks. DATATOP only.
+
+    For each patient, we infer the endpoint as the latest time where at least one
+    longitudinal variable is observed (MASK_* == 1). If data curation is messed up this won't work.
+    """
+    if df.empty or patient_col not in df.columns or time_col not in df.columns:
+        return df
+
+    mask_cols = [c for c in df.columns if c.startswith('MASK_')]
+    if not mask_cols:
+        return df[df[time_col] == df[time_col].max()]
+
+    observed_any = df[mask_cols].fillna(0).gt(0).any(axis=1)
+    endpoint_by_patient = (
+        df.loc[observed_any, [patient_col, time_col]]
+        .groupby(patient_col, as_index=False)[time_col]
+        .max()
+        .rename(columns={time_col: '_ENDPOINT_TIME'})
+    )
+
+    # Fallback for rare cases where all mask values are zero/missing.
+    if endpoint_by_patient.empty:
+        return df[df[time_col] == df[time_col].max()]
+
+    df_endpoint = df.merge(endpoint_by_patient, on=patient_col, how='inner')
+    df_endpoint = df_endpoint[np.isclose(df_endpoint[time_col], df_endpoint['_ENDPOINT_TIME'])]
+    return df_endpoint.drop(columns=['_ENDPOINT_TIME'])
+
 def main(config):
 
     print('Getting raw data')
@@ -70,6 +121,7 @@ def main(config):
         final_df.to_csv(path, index=False)
     
     if config.time_to_event:
+        # Build one row per (patient, endpoint, replicate) for survival risk export
         risk = data['Risk']
         sim_risk = data['SIMS_Risk'][:, :val_runs]
         time = data['Time_TE']
@@ -109,6 +161,7 @@ def main(config):
         risk_records.to_csv(path, index=False)
 
         if config.Val_Scenario == 0:
+            # Baseline hazard is computed from observed/reconstructed risk only
             baseline_risk = breslow_baseline_from_risk(risk_records[risk_records.REPI==0])
             path = os.path.join(raw_path, 'Baseline_Risk_TE_EP%d.csv'%(epoch))
             baseline_risk.to_csv(path, index=False)
@@ -124,10 +177,12 @@ def main(config):
     ord_types_correlation = ["ord"]
     full_types_correlation = cont_types_correlation + ord_types_correlation
     feature_to_enc = {}
-    if config.extrapolation:
+    if config.extrapolation and config.dataset != 'DATATOP':
+        # Keep legacy behavior for non-DATATOP datasets. For datatip we don't need it because we will rebuild the patient-specific extrapolation time
         T_DE = data['T_DE']
     for k in range(num_enc):
-        if config.Val_Scenario in [0, 1, 2, 3]:
+        # Export long trajectories for all DATATOP scenarios used downstream by get_scores_long
+        if config.Val_Scenario in [0, 1, 2, 3, 4, 5]:
             PTNO, REP, TIME = [], [], []
             OBS_LONG, SIMS_LONG = [], []
             REC_LONG, MASK_LONG = [], []
@@ -206,6 +261,10 @@ def main(config):
                                     df_SIMS_long, df_MASK_long,
                                     df_REC_long], axis=1)
 
+            long_type_k = long_types[k]
+            long_type_k = long_type_k[:, :2] # Because of PROACT
+            df_sims_long = round_ordinal_columns(df_sims_long, VarNames_long, long_type_k)
+
             name_enc = 'Enc%d'%(k)
             path = os.path.join(raw_path, 'Sims_Long_%s_%sEP%d.csv'%(
                 name_enc,Val_Scenario,epoch))
@@ -213,8 +272,14 @@ def main(config):
             df_sims_long.to_csv(path, index=False)
 
             if config.extrapolation:
-                df_sims_long = df_sims_long[df_sims_long['TIME'] == T_DE[-1].item()]
+                if config.dataset == 'DATATOP':
+                    # DATATOP can have patient-specific extrapolation endpoints.
+                    df_sims_long = filter_extrapolation_endpoint_per_patient(df_sims_long)
+                else:
+                    # Legacy behavior: one shared endpoint time for all patients.
+                    df_sims_long = df_sims_long[df_sims_long['TIME'] == T_DE[-1].item()]
 
+            # Score one representative replicate after applying observation masks
             df = df_sims_long[df_sims_long.REPI==1]
             for col in df.columns:
                 if col.startswith("MASK"):
@@ -238,8 +303,6 @@ def main(config):
             except:
                 pass
 
-            long_type_k = long_types[k]
-            long_type_k = long_type_k[:, :2] # Because of PROACT
             long_name_k = long_names[k]
             for name in long_name_k:
                 feature_to_enc[name] = k + 1
@@ -322,6 +385,9 @@ def main(config):
         df_sims_stat = pd.concat([df_sims_s, df_OBS_stat,
                                 df_SIM_stat, df_MASK_stat,
                                 df_REC_stat], axis=1)
+        if config.dataset == "DATATOP":
+            df_sims_stat = round_ordinal_columns(df_sims_stat, VarNames_stat, static_types)
+            df_sims_stat = df_sims_stat.loc[:, ~df_sims_stat.columns.str.endswith('_WRKRET')]
 
         path = os.path.join(raw_path, 'Sims_Stat_%sEP%d.csv'%(Val_Scenario,epoch))
         df_sims_stat.to_csv(path, index=False)

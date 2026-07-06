@@ -10,6 +10,7 @@ import sys
 sys.path.append('../')
 from data.load_PROACT import load_only_PROACT_types
 from data.load_A4 import load_only_A4_types
+from data.load_DATATOP import load_only_DATATOP_types
 from val_utils import (
     unscale, transform_back)
 warnings.filterwarnings('ignore')
@@ -256,6 +257,8 @@ class Validation(Solver):
                 real_long_types, real_static_types = load_only_A4_types(self.config)
             elif self.config.dataset == 'PROACT':
                 real_long_types, real_static_types = load_only_PROACT_types(self.config)
+            elif self.config.dataset == 'DATATOP':
+                real_long_types, real_static_types = load_only_DATATOP_types(self.config)
 
             DATA['Real_VarTypes_Long'] = real_long_types
             DATA['Real_VarTypes_Stat'] = real_static_types

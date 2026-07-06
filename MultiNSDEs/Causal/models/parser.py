@@ -42,6 +42,9 @@ def base_parser():
     parser.add_argument('--Val_Scenario', type=int,
                         default=1,
                         choices=[1])
+    parser.add_argument('--Only_ObsEndpoints', type=int,
+                        default=0,
+                        choices=[0, 1])
     parser.add_argument('--extrapolation', type=int,
                         default=0,
                         choices=[0],
@@ -252,6 +255,8 @@ def base_parser():
                         default=0.0) 
     parser.add_argument('--learn_mean', type=int,
                         default=1)
+    parser.add_argument('--survival_target_time', type=float,
+                        default=None)
     config = parser.parse_args()
     return config
 

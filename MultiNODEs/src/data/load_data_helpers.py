@@ -23,6 +23,12 @@ def process_time_groups(time_group):
 def get_data_fold(config, data_df):
     n_columns = data_df.keys()
     n_fold = 'Fold%d'%(config.train_fold)
+    use_train_split = (
+        config.train_fold == 0
+        or config.mode == 'train'
+        or config.Val_Scenario == 0
+        or (config.dataset != 'DATATOP' and config.Val_Scenario in [4, 5])
+    )
 
     # Use not all time points for training the model
     # ...... explain how it works
@@ -37,6 +43,8 @@ def get_data_fold(config, data_df):
             data_df.loc[data_df['TIME'] == 240, n_fold] = 0
         elif config.dataset == 'PROACT' and 'TIME' in data_df.columns:
             data_df.loc[data_df.groupby('subject_id')['TIME'].transform('max') == data_df['TIME'], n_fold] = 0
+        elif config.dataset == 'DATATOP' and 'LAST_VISIT_FLAG' in data_df.columns:
+            data_df.loc[data_df['LAST_VISIT_FLAG'] == 1, n_fold] = 0
             
     for n_c in n_columns:
         if 'Fold' in n_c and n_c != n_fold:
@@ -46,7 +54,7 @@ def get_data_fold(config, data_df):
     # Optuna
     if hasattr(config, 'studies_save_path'):
         data_df = data_df[data_df.TRAIN == 1]
-    elif config.train_fold == 0 or config.mode == 'train' or config.Val_Scenario in [0,4,5]:
+    elif use_train_split:
         if config.extrapolation:
             data_df['TRAIN'] = 1
             if config.dataset == 'PROACT' and 'TIME' in data_df.columns:
@@ -56,6 +64,8 @@ def get_data_fold(config, data_df):
                     data_df.loc[data_df['TIME'] == 500, 'TRAIN'] = 0
             elif config.dataset == 'A4' and 'TIME' in data_df.columns:
                 data_df.loc[data_df['TIME'] == 240, 'TRAIN'] = 0
+            elif config.dataset == 'DATATOP' and 'LAST_VISIT_FLAG' in data_df.columns:
+                data_df.loc[data_df['LAST_VISIT_FLAG'] == 1, 'TRAIN'] = 0
 
         data_df = data_df[data_df.TRAIN == 1]
     elif config.train_fold: # any fold different than 0

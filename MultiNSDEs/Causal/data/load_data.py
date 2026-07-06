@@ -4,18 +4,25 @@ import numpy as np
 import pandas as pd
 import torch
 from .load_A4 import load_data_A4
+from .load_DATATOP import load_data_DATATOP
 from .A4_dataset import A4Dataset
+from .DATATOP_dataset import DATATOP_Dataset
 from Common_Functions.data.samplers import *
 
 def load_dataset(config):
 
-    if config.dataset != 'A4_Causal':
+    if config.dataset == 'A4_Causal':
+        data = load_data_A4(config)
+        config = data[0]
+        data = data[1:]
+        dataset = A4Dataset(config, data)
+    elif config.dataset == 'DATATOP_Causal':
+        data = load_data_DATATOP(config)
+        config = data[0]
+        data = data[1:]
+        dataset = DATATOP_Dataset(config, data)
+    else:
         raise NotImplementedError("======= DATASET NOT IMPLEMENTED YET ========")
-
-    data = load_data_A4(config)
-    config = data[0]
-    data = data[1:]
-    dataset = A4Dataset(config, data)
 
     config.n_long_var = [len(sublist) for sublist in dataset.var_names_long]
     config.n_RHS_Feat = dataset.n_RHS_Feat
@@ -28,16 +35,26 @@ def load_dataset(config):
 
 def load_cv_datasets(config):
 
-    if config.dataset != 'A4_Causal':
+    if config.dataset == 'A4_Causal':
+        data = load_data_A4(config)
+        config = data[0]
+        data = data[1:]
+        data_train, data_val = split_by_train(data)
+        train_dataset = A4Dataset(config, data_train)
+    elif config.dataset == 'DATATOP_Causal':
+        data = load_data_DATATOP(config)
+        config = data[0]
+        data = data[1:]
+        data_train, data_val = split_by_train(data)
+        train_dataset = DATATOP_Dataset(config, data_train)
+    else:
         raise NotImplementedError("======= DATASET NOT IMPLEMENTED YET ========")
 
-    data = load_data_A4(config)
-    config = data[0]
-    data = data[1:]
-    data_train, data_val = split_by_train(data)
-    train_dataset = A4Dataset(config, data_train)
     config.mode = 'cv' # being sure that the if inside the dataset always works
-    test_dataset = A4Dataset(config, data_val)
+    if config.dataset == 'A4_Causal':
+        test_dataset = A4Dataset(config, data_val)
+    elif config.dataset == 'DATATOP_Causal':
+        test_dataset = DATATOP_Dataset(config, data_val)
     config.mode = 'cv'
 
     config.n_long_var = [len(sublist) for sublist in train_dataset.var_names_long]

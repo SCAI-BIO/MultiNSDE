@@ -36,7 +36,7 @@ if __name__ == '__main__':
     else:
         config.GPU = False
 
-    if config.dataset in ['A4', 'DATATOP']:
+    if config.dataset in ['A4']:
         config.longdata_fname = [i for i in config.longdata_fname.split(',')]
         config.longtypes_fname = [i for i in config.longtypes_fname.split(',')]
         config.real_longtypes_fname = [i for i in config.real_longtypes_fname.split(',')]

@@ -7,6 +7,7 @@ from glob import glob
 from parser import base_parser
 import syndat
 import warnings
+from get_raw_data import filter_extrapolation_endpoint_per_patient
 warnings.filterwarnings('ignore')
 
 def main(config):
@@ -34,7 +35,7 @@ def main(config):
     feature_to_enc = {}
     base_names = ["PTNO", "REPI", "DRUG", "TIME"]
     cols_cont_corr, cols_ord_corr, cols_full_corr = [], [], []
-    if config.extrapolation:
+    if config.extrapolation and config.dataset != 'DATATOP':
         T_DE = data['T_DE']
     for k in range(num_enc):
         name_enc = 'Enc%d'%(k)
@@ -43,10 +44,16 @@ def main(config):
 
         df = pd.read_csv(
             path,
-            usecols=lambda c: c.startswith(('PTNO', 'TIME','OBS_', 'SIM_', 'MASK_', 'REPI', 'DRUG')))
-        df = df[df.REPI==1]
+            usecols=lambda c: c.startswith(('PTNO', 'TIME','OBS_', 'SIM_', 'MASK_', 'REC_', 'REPI', 'DRUG')))
+        if config.dataset == 'DATATOP':
+            df = df[df.REPI<=5]
+        else:
+            df = df[df.REPI==1]
         if config.extrapolation:
-            df = df[df['TIME'] == T_DE[-1].item()]
+            if config.dataset == 'DATATOP':
+                df = filter_extrapolation_endpoint_per_patient(df)
+            else:
+                df = df[df['TIME'] == T_DE[-1].item()]
             
         for col in df.columns:
             if col.startswith("MASK"):
@@ -56,7 +63,7 @@ def main(config):
                 df[f'OBS_{var_name}'] = df[f'OBS_{var_name}'].mask(mask)
                 df[f'SIM_{var_name}'] = df[f'SIM_{var_name}'].mask(mask)
         # Removing times where all columns are missing
-        cols_obs_rec = [c for c in df.columns if c.startswith('OBS_') or c.startswith('SIM_')]
+        cols_obs_rec = [c for c in df.columns if c.startswith(('OBS_', 'SIM_', 'REC_'))]
         cols = np.concatenate([base_names, cols_obs_rec])
         if k == 0:
             full_df = df[cols]
@@ -76,6 +83,10 @@ def main(config):
 
         mask = [type_ in full_types_correlation for type_, _ in long_type_k]
         cols_full_corr = np.concatenate((cols_full_corr, [f"OBS_{var}" for var in long_name_k[mask]]))
+
+    Val_Scenario = 'Train_' if config.Val_Scenario == 0 else 'Val_'
+    path = os.path.join(raw_path, '%sFull_Dataframe.csv'%(Val_Scenario))
+    full_df.to_csv(path, index=False)
 
     observed_df = full_df[[col for col in full_df.columns if col.startswith("OBS")]]
     predictions_df = full_df[[col for col in full_df.columns if col.startswith("REC")]]
