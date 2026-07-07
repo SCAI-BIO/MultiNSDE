@@ -95,12 +95,32 @@ def get_HR(df, baseline_df, dataset, horizon=None):
 
     return pd.concat(patient_rows, ignore_index=True)
 
-def get_ATE(df, dataset):
+def get_ATE(df, dataset, method='AIPW', baseline_df=None, horizon=None, return_hr=False):
+    """
+    Compute average treatment effect outputs for causal model predictions.
 
-    if dataset == "DATATOP_Causal":
-        raise ValueError('DATATOP_Causal ATE must be computed from RMST Risk_TE/Baseline_Risk_TE outputs.')
+    :param df: pandas.DataFrame or list[pandas.DataFrame]
+        For AIPW, the concatenated per-fold prediction output. For RMST, the
+        Risk_TE output DataFrame or a list of Risk_TE DataFrames.
+    :param dataset: str
+        Dataset name. RMST is intended for DATATOP_Causal survival outputs.
+    :param method: {'AIPW', 'RMST'}, optional
+        AIPW computes treatment effects from longitudinal outcome predictions.
+        RMST computes treatment effects from survival Risk_TE and
+        Baseline_Risk_TE outputs (DeepSurv outputs).
+    :param baseline_df: pandas.DataFrame or list[pandas.DataFrame], optional
+        Baseline_Risk_TE output required when method is RMST.
+    :param horizon: float, optional
+        Survival time horizon used for RMST and hazard ratio summaries.
+    :param return_hr: bool, optional
+        If True with RMST, also return hazard ratio summaries.
 
-    else:
+    :return: pandas.DataFrame or tuple[pandas.DataFrame, pandas.DataFrame]
+        ATE output DataFrame. When method is RMST and return_hr is True,
+        returns ``(ate_df, hr_df)``.
+    """
+
+    if method=='AIPW': # ATE based on the outcome of a specific metric
 
         # df = df[df.MASK_END == 1.0]
         df["Y1_BL_hat"] = AIPW_Y_hat(df, a=1, t=0)
@@ -143,6 +163,38 @@ def get_ATE(df, dataset):
         print('average MAE: ', mae_global )
         return df
 
+    if method=='RMST': # ATE based on survival analysis
+
+        risk_dfs = df if isinstance(df, list) else [df]
+        baseline_dfs = baseline_df if isinstance(baseline_df, list) else [baseline_df]
+
+        tau_outputs = []
+        hr_outputs = []
+        for risk_fold_df, baseline_fold_df in zip(risk_dfs, baseline_dfs):
+            tau_outputs.append(
+                get_survival_tau(
+                    risk_fold_df,
+                    baseline_fold_df,
+                    horizon=horizon
+                )
+            )
+            if return_hr:
+                hr_outputs.append(
+                    get_HR(
+                        risk_fold_df,
+                        baseline_fold_df,
+                        dataset,
+                        horizon=horizon
+                    )
+                )
+
+        ate_df = summarize_survival_tau(pd.concat(tau_outputs, ignore_index=True))
+        if not return_hr:
+            return ate_df
+
+        hr_df = summarize_log_hr(pd.concat(hr_outputs, ignore_index=True)) if len(hr_outputs) > 0 else None
+        return ate_df, hr_df
+
 if __name__ == '__main__':
 
     config = base_parser()
@@ -152,8 +204,8 @@ if __name__ == '__main__':
     folds = os.listdir(path)
     folds = [f for f in folds if f.startswith("Fold")]
     if config.dataset == 'DATATOP_Causal':
-        tau_outputs = []
-        hr_outputs = []
+        risk_outputs = []
+        baseline_outputs = []
         missing_folds = []
         for fold in folds:
             raw_output_path = os.path.join(path, fold, 'samples/Val_Imgs_Sampling_Prior/Raw_Output')
@@ -170,51 +222,38 @@ if __name__ == '__main__':
 
             risk_df = pd.read_csv(os.path.join(raw_output_path, best_risk), index_col=False)
             baseline_df = pd.read_csv(os.path.join(raw_output_path, best_baseline), index_col=False)
-            hr_outputs.append(
-                get_HR(
-                    risk_df,
-                    baseline_df,
-                    config.dataset,
-                    horizon=getattr(config, 'survival_target_time', None)
-                )
-            )
-            tau_outputs.append(
-                get_survival_tau_datatop(
-                    risk_df,
-                    baseline_df,
-                    horizon=getattr(config, 'survival_target_time', None)
-                )
-            )
+            risk_outputs.append(risk_df)
+            baseline_outputs.append(baseline_df)
 
-        if missing_folds:
-            raise FileNotFoundError(
-                'DATATOP_Causal RMST ATE requires Risk_TE and Baseline_Risk_TE files for every fold. '
-                f'Missing files for: {missing_folds}'
-            )
-        if len(tau_outputs) == 0:
-            raise FileNotFoundError('DATATOP_Causal RMST ATE found no Risk_TE/Baseline_Risk_TE outputs.')
-        df = summarize_survival_tau(pd.concat(tau_outputs, ignore_index=True))
+        df, hr_df = get_ATE(
+            risk_outputs,
+            config.dataset,
+            method='RMST',
+            baseline_df=baseline_outputs,
+            horizon=getattr(config, 'survival_target_time', None),
+            return_hr=True
+        )
+
         ate_path = os.path.join(result_dir, 'ATE_Output.csv')
         df.to_csv(ate_path, index=False)
-        if len(hr_outputs) > 0:
-            hr_df = summarize_log_hr(pd.concat(hr_outputs, ignore_index=True))
+        if hr_df is not None:
             hr_path = os.path.join(result_dir, 'HR_Output.csv')
             hr_df.to_csv(hr_path, index=False)
-        raise SystemExit(0)
 
-    for i, fold in enumerate(folds):
-        raw_output_path = os.path.join(path, fold, 'samples/Val_Imgs_Sampling_Prior/Raw_Output')
-        raw_outputs = os.listdir(raw_output_path)
-        raw_outputs = [f for f in raw_outputs if f.startswith("Output")]
-        best_file = max(raw_outputs, key=get_ep)
+    elif config.dataset == 'A4_Causal':
+        for i, fold in enumerate(folds):
+            raw_output_path = os.path.join(path, fold, 'samples/Val_Imgs_Sampling_Prior/Raw_Output')
+            raw_outputs = os.listdir(raw_output_path)
+            raw_outputs = [f for f in raw_outputs if f.startswith("Output")]
+            best_file = max(raw_outputs, key=get_ep)
 
-        output_path = os.path.join(raw_output_path, best_file)
-        df = pd.read_csv(output_path, index_col=False)
+            output_path = os.path.join(raw_output_path, best_file)
+            df = pd.read_csv(output_path, index_col=False)
 
-        if i==0:
-            total_df = df
-        else:
-            total_df = pd.concat((total_df, df), ignore_index=True)
-    df = get_ATE(total_df, config.dataset)
-    path = os.path.join(path, 'ATE_Output.csv')
-    df.to_csv(path, index=False)
+            if i==0:
+                total_df = df
+            else:
+                total_df = pd.concat((total_df, df), ignore_index=True)
+        df = get_ATE(total_df, config.dataset, method='AIPW')
+        path = os.path.join(path, 'ATE_Output.csv')
+        df.to_csv(path, index=False)

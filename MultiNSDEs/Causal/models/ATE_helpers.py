@@ -130,7 +130,7 @@ def _stepwise_rmst_from_risk(log_risk, baseline_times, baseline_cumhaz, horizon)
     return np.sum(surv * interval_lengths[None, :], axis=1)
 
 
-def get_survival_tau_datatop(risk_df, baseline_df, horizon=None):
+def get_survival_tau(risk_df, baseline_df, horizon=None):
     risk_df = risk_df.copy()
     risk_df['Arm'] = pd.to_numeric(risk_df['Arm'], errors='coerce')
     risk_df['REPI'] = pd.to_numeric(risk_df['REPI'], errors='coerce')
@@ -171,9 +171,6 @@ def get_survival_tau_datatop(risk_df, baseline_df, horizon=None):
             out['RMST_ARM'] = np.round(rmst_arm, 6)
             out['Tau_hat_i'] = np.round(tau, 6)
             patient_rows.append(out)
-
-    if len(patient_rows) == 0:
-        raise ValueError('Could not build DATATOP survival ATE from Risk_TE/Baseline_Risk_TE files.')
 
     return pd.concat(patient_rows, ignore_index=True)
 
@@ -258,8 +255,5 @@ def summarize_log_hr(log_hr_df):
         else:
             print(f'{var_name} {comparison} at horizon {horizon:.6f} - HR: {hr_hat:.6f}')
         print('CI: (%.6f , %.6f)' % (ci_lower, ci_upper))
-
-    if len(outputs) == 0:
-        raise ValueError('Could not build DATATOP hazard ratios from Risk_TE files.')
 
     return pd.concat(outputs, ignore_index=True)
