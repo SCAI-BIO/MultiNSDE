@@ -123,10 +123,10 @@ def get_ATE(df, dataset, method='AIPW', baseline_df=None, horizon=None, return_h
     if method=='AIPW': # ATE based on the outcome of a specific metric
 
         # df = df[df.MASK_END == 1.0]
-        df["Y1_BL_hat"] = AIPW_Y_hat(df, a=1, t=0)
-        df["Y1_END_hat"] = AIPW_Y_hat(df, a=1, t=1)
-        df["Y0_BL_hat"] = AIPW_Y_hat(df, a=0, t=0)
-        df["Y0_END_hat"] = AIPW_Y_hat(df, a=0, t=1)
+        df["Y1_BL_hat"] = AIPW_Y_hat(df, a=1, t=0, g=False)
+        df["Y1_END_hat"] = AIPW_Y_hat(df, a=1, t=1, g=False)
+        df["Y0_BL_hat"] = AIPW_Y_hat(df, a=0, t=0, g=False)
+        df["Y0_END_hat"] = AIPW_Y_hat(df, a=0, t=1, g=False)
 
         df["Y1_DIFF"] = df["Y1_END_hat"] - df["Y1_BL_hat"]
         df["Y0_DIFF"] = df["Y0_END_hat"] - df["Y0_BL_hat"]
