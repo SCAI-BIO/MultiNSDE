@@ -179,9 +179,9 @@ def base_parser():
     parser.add_argument('--use_months_time', type=int,
                         default=1)
     parser.add_argument('--sde_noise_type', type=str,
-                        default='fixed',
+                        default='nn',
                         choices=['fixed', 'learned_all',
-                                'learned_ind'])
+                                'learned_ind', 'nn'])
     parser.add_argument('--sde_noise_init', type=float,
                         default=0.1)
 

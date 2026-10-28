@@ -45,7 +45,15 @@ class NSDE_DRHS_Mix_Ito(torchsde.SDEIto):
             self.noise_scale = nn.Parameter(torch.tensor(config.sde_noise_init))
         elif config.sde_noise_type == 'learned_ind':
             self.noise_scale = nn.Parameter(torch.full((out_dim,), config.sde_noise_init))
-
+        elif config.sde_noise_type == 'nn':
+            self.noise_scale = nn.Sequential(
+                nn.Linear(out_dim + 1, out_dim),
+                nn.Softplus())
+        else:
+            raise ValueError(
+                f"Unknown SDE noise type: "
+                f"{config.sde_noise_type}")
+        self.noise_scale_type = config.sde_noise_type
         self.DRHS_PBO_slide = config.DRHS_PBO_slide
 
     def set_data(self, dose_data, T, drhs_data, static_data=None):
@@ -66,7 +74,11 @@ class NSDE_DRHS_Mix_Ito(torchsde.SDEIto):
         return out
 
     def g(self, t, x):
-        return self.noise_scale * torch.ones_like(x)
+        if self.noise_scale_type == 'nn':
+            t_batch = t.to(x).expand(x.shape[0], 1)
+            return self.noise_scale(torch.cat([x, t_batch], dim=-1))
+        else:
+            return self.noise_scale * torch.ones_like(x)
 
     def _get_index(self, t):
         t_scalar = t.item()
@@ -113,7 +125,15 @@ class NSDE_DRHS_Mix_Stra(torchsde.SDEStratonovich):
             self.noise_scale = nn.Parameter(torch.tensor(config.sde_noise_init))
         elif config.sde_noise_type == 'learned_ind':
             self.noise_scale = nn.Parameter(torch.full((out_dim,), config.sde_noise_init))
-
+        elif config.sde_noise_type == 'nn':
+            self.noise_scale = nn.Sequential(
+                nn.Linear(out_dim + 1, out_dim),
+                nn.Softplus())
+        else:
+            raise ValueError(
+                f"Unknown SDE noise type: "
+                f"{config.sde_noise_type}")
+        self.noise_scale_type = config.sde_noise_type
         self.DRHS_PBO_slide = config.DRHS_PBO_slide
 
     def set_data(self, dose_data, T, drhs_data):
@@ -133,7 +153,11 @@ class NSDE_DRHS_Mix_Stra(torchsde.SDEStratonovich):
         return out
 
     def g(self, t, x):
-        return self.noise_scale * torch.ones_like(x)
+        if self.noise_scale_type == 'nn':
+            t_batch = t.to(x).expand(x.shape[0], 1)
+            return self.noise_scale(torch.cat([x, t_batch], dim=-1))
+        else:
+            return self.noise_scale * torch.ones_like(x)
 
     def _get_index(self, t):
         t_scalar = t.item()

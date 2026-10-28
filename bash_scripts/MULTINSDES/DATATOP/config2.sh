@@ -81,7 +81,7 @@ ANDE_dim=0 # Number of additional compartments if ANDE is used. If  0<ANDE_dim<1
 # Dynamics lerner specifications
 type_dynamics_lerner=NSDE_DRHS_Mix
 dl_static_data=CONCAT # ADD/CONCAT
-sde_noise_type=learned_ind
+sde_noise_type=nn
 sde_noise_init=0.1
 norm_time=1
 
